@@ -1,0 +1,37 @@
+name: Plan approval
+description: >-
+  (Copied from kavrynt-platform; keep the two in step.)
+  Opens an issue with a Terraform plan summary and waits for a listed approver
+  to comment "approve" or "deny". Succeeds only on approval. GitHub's native
+  environment approvals are not available for private repositories on this
+  plan; replace this action with an environment that has required reviewers
+  when they are.
+
+inputs:
+  approvers:
+    description: Comma-separated GitHub logins whose decision counts.
+    required: true
+  title:
+    description: Issue title. Include the run ID so a cancelled run can close its issue.
+    required: true
+  body-file:
+    description: Markdown file with the plan summary.
+    required: true
+  timeout-minutes:
+    description: How long to wait for a decision before failing.
+    required: false
+    default: "60"
+
+runs:
+  using: composite
+  steps:
+    - name: Wait for a decision
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        APPROVERS: ${{ inputs.approvers }}
+        TITLE: ${{ inputs.title }}
+        BODY_FILE: ${{ inputs.body-file }}
+        TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: ${{ github.action_path }}/approve.sh

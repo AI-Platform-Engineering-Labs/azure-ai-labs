@@ -1,0 +1,27 @@
+# End-to-end checks from inside the cluster. scripts/lab.sh deletes and re-creates this Job.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lab-check
+  namespace: lab-agents
+  labels: {lab.kavrynt.io/role: check}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: {lab.kavrynt.io/role: check}
+    spec:
+      restartPolicy: Never
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: check
+          image: kavrynt-lab:local
+          imagePullPolicy: IfNotPresent
+          args: [check, --metrics-timeout, "180"]
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 64Mi}}]

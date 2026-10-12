@@ -1,0 +1,124 @@
+# Scripted agents. All traffic goes through the Kavrynt Gateway; each call is scored
+# against policies/expectations.yaml (mounted from the lab-expectations ConfigMap).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: support-agent
+  namespace: lab-agents
+  labels: {app: support-agent, lab.kavrynt.io/role: agent}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: support-agent}
+  template:
+    metadata:
+      labels: {app: support-agent, lab.kavrynt.io/role: agent}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+        prometheus.io/path: /metrics
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: agent
+          image: kavrynt-lab:local
+          imagePullPolicy: IfNotPresent
+          args: [agent, --persona, support-agent]
+          env:
+            - {name: KAVRYNT_GATEWAY, value: "http://kavrynt-gateway.kavrynt-system.svc:8080"}
+            - {name: AGENT_INTERVAL, value: "2"}
+          ports: [{name: metrics, containerPort: 9100}]
+          volumeMounts:
+            - {name: expectations, mountPath: /etc/kavrynt-lab, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+      volumes:
+        - name: expectations
+          configMap: {name: lab-expectations}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments-agent
+  namespace: lab-agents
+  labels: {app: payments-agent, lab.kavrynt.io/role: agent}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: payments-agent}
+  template:
+    metadata:
+      labels: {app: payments-agent, lab.kavrynt.io/role: agent}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+        prometheus.io/path: /metrics
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: agent
+          image: kavrynt-lab:local
+          imagePullPolicy: IfNotPresent
+          args: [agent, --persona, payments-agent]
+          env:
+            - {name: KAVRYNT_GATEWAY, value: "http://kavrynt-gateway.kavrynt-system.svc:8080"}
+            - {name: AGENT_INTERVAL, value: "2"}
+          ports: [{name: metrics, containerPort: 9100}]
+          volumeMounts:
+            - {name: expectations, mountPath: /etc/kavrynt-lab, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+      volumes:
+        - name: expectations
+          configMap: {name: lab-expectations}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rogue-agent
+  namespace: lab-agents
+  labels: {app: rogue-agent, lab.kavrynt.io/role: agent}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: rogue-agent}
+  template:
+    metadata:
+      labels: {app: rogue-agent, lab.kavrynt.io/role: agent}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+        prometheus.io/path: /metrics
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: agent
+          image: kavrynt-lab:local
+          imagePullPolicy: IfNotPresent
+          args: [agent, --persona, rogue-agent]
+          env:
+            - {name: KAVRYNT_GATEWAY, value: "http://kavrynt-gateway.kavrynt-system.svc:8080"}
+            - {name: AGENT_INTERVAL, value: "3"}
+          ports: [{name: metrics, containerPort: 9100}]
+          volumeMounts:
+            - {name: expectations, mountPath: /etc/kavrynt-lab, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+      volumes:
+        - name: expectations
+          configMap: {name: lab-expectations}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}

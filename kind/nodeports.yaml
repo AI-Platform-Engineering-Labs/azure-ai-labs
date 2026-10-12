@@ -1,0 +1,38 @@
+# Kind only: NodePorts behind the 127.0.0.1 host port mappings in kind/cluster.yaml.
+# The cluster manifests themselves use ClusterIP, so AKS exposes nothing.
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana-kind
+  namespace: lab-monitoring
+spec:
+  type: NodePort
+  selector: {app: grafana}
+  ports:
+    - {name: http, port: 3000, targetPort: http, nodePort: 30300}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-kind
+  namespace: lab-monitoring
+spec:
+  type: NodePort
+  selector: {app: prometheus}
+  ports:
+    - {name: http, port: 9090, targetPort: http, nodePort: 30090}
+---
+# The chart's Gateway, for MCP clients on the laptop. Selector matches the chart's
+# kavrynt-gateway Service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kavrynt-gateway-kind
+  namespace: kavrynt-system
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: gateway
+    app.kubernetes.io/instance: kavrynt
+  ports:
+    - {name: http, port: 8080, targetPort: 8080, nodePort: 30880}

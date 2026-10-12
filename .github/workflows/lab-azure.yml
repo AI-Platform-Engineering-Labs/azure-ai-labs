@@ -1,0 +1,403 @@
+name: Azure Lab
+
+# The lab on AKS, created on demand and destroyed when not needed
+# (docs/runbooks/azure-lab.md). In stages, like kavrynt-platform:
+#   manual run on main, operation "up"        plan -> approval -> apply -> deploy -> checks
+#   manual run on main, operation "down"      destroy plan -> destroy -> nothing-left check
+#                                             (no approval: removing the lab is always safe)
+#   manual run on main, operation "plan-only" plan, nothing applied
+#   schedule (every 2 hours)                  TTL reaper: destroys the lab once the
+#                                             kavrynt-lab-expires-at tag has passed
+#   pull request into main                    plan, read-only (shown on the run)
+# The approval stage opens an issue with the plan and waits for an approver (repository
+# variable LAB_APPROVERS, default: whoever started the run) to comment "approve" or "deny".
+# Apply then applies exactly the plan from this run.
+#
+# The stack (infra/azure: AKS and a registry) lives in rg-kavrynt-lab, which kavrynt-platform's
+# landing zone owns together with this workflow's identity, state container and budget. Jobs
+# that use Azure are skipped until the landing zone's repository variables are set
+# (docs/runbooks/azure-setup.md).
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - infra/azure/**
+      - .github/workflows/lab-azure.yml
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: up (create or update, then deploy), down (destroy), or plan only
+        type: choice
+        options: [up, down, plan-only]
+        default: up
+      ttl_hours:
+        description: Hours until the TTL reaper destroys the lab (operation up)
+        type: choice
+        options: ["2", "4", "8", "12", "24"]
+        default: "8"
+  schedule:
+    # Every two hours keeps Actions minutes low; a lab outlives its TTL by at most that.
+    - cron: "41 */2 * * *"
+
+permissions:
+  contents: read
+
+# One lab, one queue: up, down and the reaper never overlap. Pull requests get their own group,
+# so a pull request push can never cancel a queued run on main. Never cancel in progress: an
+# interrupted apply can leave the state lease held.
+concurrency:
+  group: azure-lab-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'main' }}
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  TERRAFORM_VERSION: 1.16.5
+  HELM_VERSION: v3.22.0
+  KUBELOGIN_VERSION: v0.2.21
+  TF_DIR: infra/azure
+  ARM_USE_OIDC: "true"
+  ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+jobs:
+  reaper:
+    name: TTL reaper
+    if: github.event_name == 'schedule' && vars.AZURE_CLIENT_ID != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      expired: ${{ steps.ttl.outputs.expired }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Sign in to Azure
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Expired: anything is left in the resource group and no cluster's TTL is still running
+      # (a cluster without the tag, or leftovers from a failed run, count as expired).
+      - name: Check the lab's TTL
+        id: ttl
+        run: |
+          rg=$(sed -n 's/^resource_group_name *= *"\([^"]*\)".*/\1/p' "${TF_DIR}/terraform.tfvars")
+          now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          resources=$(az resource list --resource-group "${rg}" --query "length(@)" -o tsv)
+          running=$(az aks list --resource-group "${rg}" --query '[].tags."kavrynt-lab-expires-at"' -o json |
+            jq --arg now "${now}" '[.[] | select(. != null and . > $now)] | length')
+          if [ "${resources}" -eq 0 ]; then
+            expired=false; message="No lab is running in ${rg}."
+          elif [ "${running}" -gt 0 ]; then
+            expired=false; message="The lab in ${rg} is within its TTL."
+          else
+            expired=true; message="The lab in ${rg} has expired: destroying it."
+          fi
+          echo "expired=${expired}" >> "$GITHUB_OUTPUT"
+          echo "### ${message}" >> "$GITHUB_STEP_SUMMARY"
+          echo "${message}"
+
+  plan:
+    name: Plan
+    needs: reaper
+    # Federated credentials trust main and pull requests only.
+    if: >-
+      !cancelled() && vars.AZURE_CLIENT_ID != '' &&
+      (github.event_name == 'pull_request' ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+       (github.event_name == 'schedule' && needs.reaper.outputs.expired == 'true'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      MODE: ${{ (github.event_name == 'schedule' || inputs.operation == 'down') && 'destroy' || 'apply' }}
+      TTL_HOURS: ${{ inputs.ttl_hours || '8' }}
+      REQUESTED_BY: ${{ github.event_name == 'schedule' && 'ttl-reaper' || github.actor }}
+    outputs:
+      changes: ${{ steps.summary.outputs.changes }}
+      mode: ${{ env.MODE }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Plan
+        run: |
+          TF_VAR_expires_at=$(date -u -d "+${TTL_HOURS} hours" +%Y-%m-%dT%H:%M:%SZ)
+          export TF_VAR_expires_at TF_VAR_requested_by="${REQUESTED_BY}"
+          destroy=()
+          if [ "${MODE}" = destroy ]; then destroy=(-destroy); fi
+          terraform -chdir="${TF_DIR}" init -input=false -backend-config=backend.hcl
+          terraform -chdir="${TF_DIR}" plan -lock-timeout=5m "${destroy[@]}" \
+            -var-file=terraform.tfvars -out=lab.tfplan
+
+      # The plan holds no secrets (no generated credentials), so it can be an artifact.
+      - name: Summarize plan
+        id: summary
+        run: |
+          terraform -chdir="${TF_DIR}" show -no-color lab.tfplan > plan.txt
+          changes=$(terraform -chdir="${TF_DIR}" show -json lab.tfplan |
+            jq '[.resource_changes[]? | select(.change.actions != ["no-op"] and .change.actions != ["read"])] | length')
+          echo "changes=${changes}" >> "$GITHUB_OUTPUT"
+          {
+            if [ "${MODE}" = destroy ]; then
+              echo "### Azure lab DESTROY plan for \`${GITHUB_SHA::12}\` (${REQUESTED_BY})"
+              echo
+              echo "Removes the AKS cluster and the registry. The resource group, budget, state and identity stay."
+            else
+              echo "### Azure lab plan for \`${GITHUB_SHA::12}\` (${REQUESTED_BY}, TTL ${TTL_HOURS}h)"
+            fi
+            echo
+            grep -E '^Plan:|^No changes' plan.txt || true
+            echo
+            echo '```'
+            grep -E '^  # ' plan.txt || true
+            echo '```'
+          } > summary.md
+          {
+            cat summary.md
+            echo
+            echo "<details><summary>Full plan</summary>"
+            echo
+            echo '```'
+            cat plan.txt
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+          cp "${TF_DIR}/lab.tfplan" plan.tfplan
+
+      - name: Save plan
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lab-plan
+          path: |
+            plan.tfplan
+            plan.txt
+            summary.md
+          retention-days: 1
+          if-no-files-found: error
+
+  approval:
+    name: Approval
+    needs: plan
+    # Creating the lab costs money, so "up" waits for a person. Destroying never waits.
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.operation == 'up' &&
+      needs.plan.outputs.changes != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download plan summary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: lab-plan
+          path: reviewed
+
+      - name: Wait for approval
+        uses: ./.github/actions/approval
+        with:
+          approvers: ${{ vars.LAB_APPROVERS || github.actor }}
+          title: ${{ format('Create or update the Azure lab (run {0})', github.run_id) }}
+          body-file: reviewed/summary.md
+
+      - name: Close the approval issue of a cancelled run
+        if: cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue list --repo "$GITHUB_REPOSITORY" --state open --json number,title \
+            --jq ".[] | select(.title | endswith(\"(run ${GITHUB_RUN_ID})\")) | .number" |
+            xargs -r -I{} gh issue close {} --repo "$GITHUB_REPOSITORY" --comment "Run cancelled; nothing was applied."
+
+  apply:
+    name: Apply (create and deploy, or destroy)
+    needs: [plan, approval]
+    if: >-
+      !cancelled() && needs.plan.result == 'success' && github.event_name != 'pull_request' &&
+      inputs.operation != 'plan-only' &&
+      (needs.approval.result == 'success' ||
+       (needs.approval.result == 'skipped' &&
+        (needs.plan.outputs.mode == 'destroy' || needs.plan.outputs.changes == '0')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      MODE: ${{ needs.plan.outputs.mode }}
+      CHANGES: ${{ needs.plan.outputs.changes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download approved plan
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: lab-plan
+          path: reviewed
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      # Applies the saved plan, never a new one. If the state changed since the plan,
+      # Terraform refuses ("Saved plan is stale"); run the workflow again.
+      - name: Apply the plan
+        run: |
+          terraform -chdir="${TF_DIR}" init -input=false -backend-config=backend.hcl
+          if [ "${CHANGES}" != 0 ]; then
+            cp reviewed/plan.tfplan "${TF_DIR}/lab.tfplan"
+            terraform -chdir="${TF_DIR}" apply -lock-timeout=5m lab.tfplan
+          fi
+          {
+            if [ "${MODE}" = destroy ]; then echo "### Destroyed the Azure lab"; else echo "### Applied the Azure lab plan"; fi
+            echo
+            grep -E '^Plan:|^No changes' reviewed/plan.txt || true
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Sign in to Azure
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # A lab that is down must cost nothing: fail loudly if anything survived the destroy.
+      - name: Check that nothing is left
+        if: env.MODE == 'destroy'
+        run: |
+          rg=$(sed -n 's/^resource_group_name *= *"\([^"]*\)".*/\1/p' "${TF_DIR}/terraform.tfvars")
+          left=$(az resource list --resource-group "${rg}" --query "[].{name:name, type:type}" -o tsv)
+          nodes=$(az group list --query "[?starts_with(name, 'MC_${rg}_')].name" -o tsv)
+          if [ -n "${left}${nodes}" ]; then
+            {
+              echo "### Resources left after destroy (docs/runbooks/azure-lab.md, Leftovers)"
+              echo '```'
+              printf '%s\n%s\n' "${left}" "${nodes}"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Resources are left in ${rg} or its node resource group; see the run summary."
+            exit 1
+          fi
+          echo "Nothing is left in ${rg}." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up kubelogin
+        if: env.MODE == 'apply'
+        uses: azure/use-kubelogin@0ce7c36141aa27d4934872cf00b0120804c98a29 # v1.3
+        with:
+          kubelogin-version: ${{ env.KUBELOGIN_VERSION }}
+
+      - name: Set up Helm
+        if: env.MODE == 'apply'
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Read lab outputs
+        if: env.MODE == 'apply'
+        run: |
+          for name in resource_group_name cluster_name registry_name registry_login_server expires_at; do
+            echo "LAB_$(tr '[:lower:]' '[:upper:]' <<<"${name}")=$(terraform -chdir="${TF_DIR}" output -raw "${name}")" >> "$GITHUB_ENV"
+          done
+
+      # The AcrPush role can take a few minutes to apply after a fresh create.
+      - name: Build and push the lab image
+        if: env.MODE == 'apply'
+        run: |
+          image="${LAB_REGISTRY_LOGIN_SERVER}/kavrynt-lab:${GITHUB_SHA::12}"
+          docker build --quiet -t "${image}" lab
+          for attempt in $(seq 1 12); do
+            if az acr login --name "${LAB_REGISTRY_NAME}" && docker push --quiet "${image}"; then
+              echo "LAB_IMAGE=${image}" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "Push attempt ${attempt} failed; waiting for role propagation."
+            sleep 20
+          done
+          echo "::error::Could not push ${image}."
+          exit 1
+
+      # Azure RBAC for Kubernetes also takes a minute or two after a fresh create.
+      - name: Connect to the cluster
+        if: env.MODE == 'apply'
+        run: |
+          az aks get-credentials --resource-group "${LAB_RESOURCE_GROUP_NAME}" --name "${LAB_CLUSTER_NAME}" --overwrite-existing
+          kubelogin convert-kubeconfig -l azurecli
+          echo "KUBE_CONTEXT=${LAB_CLUSTER_NAME}" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 30); do
+            if kubectl --context "${LAB_CLUSTER_NAME}" get namespace kube-system >/dev/null 2>&1; then exit 0; fi
+            sleep 10
+          done
+          echo "::error::No access to ${LAB_CLUSTER_NAME} after 5 minutes."
+          exit 1
+
+      - name: Deploy the lab
+        if: env.MODE == 'apply'
+        env:
+          TARGET: aks
+          WAIT_TIMEOUT: 600s
+        run: bash scripts/lab.sh up
+
+      - name: End-to-end checks
+        if: env.MODE == 'apply'
+        env:
+          TARGET: aks
+        run: bash scripts/lab.sh check
+
+      - name: How to use the lab
+        if: env.MODE == 'apply'
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ### The Azure lab is up until ${LAB_EXPIRES_AT}
+
+          Nothing is exposed publicly. As a member of kavrynt-platform-admins:
+
+          \`\`\`bash
+          az aks get-credentials --resource-group ${LAB_RESOURCE_GROUP_NAME} --name ${LAB_CLUSTER_NAME}
+          kubelogin convert-kubeconfig -l azurecli
+          kubectl --context ${LAB_CLUSTER_NAME} -n lab-monitoring port-forward svc/grafana 3000:3000
+          \`\`\`
+
+          Then open http://localhost:3000/d/kavrynt-governance. Run this workflow with
+          operation **down** when you are done; the TTL reaper removes it after ${LAB_EXPIRES_AT} anyway.
+          EOF
+
+      - name: Diagnostics
+        if: failure() && env.MODE == 'apply' && env.KUBE_CONTEXT != ''
+        env:
+          TARGET: aks
+        run: |
+          bash scripts/lab.sh status || true
+          kubectl --context "${KUBE_CONTEXT}" get events -A --sort-by=.lastTimestamp | tail -60 || true
+          kubectl --context "${KUBE_CONTEXT}" -n kavrynt-system logs deploy/kavrynt-gateway --tail=100 || true
+          echo "The cluster stays up for debugging; run the workflow with operation down, or let the TTL reaper remove it."

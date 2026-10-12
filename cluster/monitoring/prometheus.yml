@@ -1,0 +1,52 @@
+# Prometheus config for the lab. 5s scrapes so the dashboard reacts in near real time.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  # Kavrynt runtime: the Gateway (port "http") and the Operator (controller-runtime, port "metrics").
+  - job_name: kavrynt
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces: {names: [kavrynt-system]}
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_container_port_name]
+        regex: gateway;http|operator;metrics
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+        target_label: component
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+
+  # Lab MCP servers and agents opt in with prometheus.io/* pod annotations.
+  - job_name: lab
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        regex: "true"
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_phase]
+        regex: Running
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        regex: (.+)
+        target_label: __metrics_path__
+      - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+        target_label: __address__
+      - source_labels: [__meta_kubernetes_pod_label_lab_kavrynt_io_role]
+        target_label: role
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        target_label: app
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]

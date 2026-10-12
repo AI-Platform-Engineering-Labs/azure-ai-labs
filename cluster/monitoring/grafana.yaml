@@ -1,0 +1,68 @@
+# Grafana with anonymous Editor access, so the lab needs no login. It is never
+# exposed beyond the operator's machine: Kind binds it to 127.0.0.1 and AKS is
+# reached through kubectl port-forward.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: lab-monitoring
+  labels: {app: grafana}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: grafana}
+  template:
+    metadata:
+      labels: {app: grafana}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10472
+        runAsGroup: 10472
+        fsGroup: 10472
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: grafana
+          image: grafana/grafana:12.0.0@sha256:263cbefd5d9b179893c47c415daab4da5c1f3d6770154741eca4f45c81119884
+          env:
+            - {name: GF_AUTH_ANONYMOUS_ENABLED, value: "true"}
+            - {name: GF_AUTH_ANONYMOUS_ORG_ROLE, value: Editor}
+            - {name: GF_AUTH_DISABLE_LOGIN_FORM, value: "true"}
+            - {name: GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH, value: /var/lib/grafana/dashboards/governance.json}
+            - {name: GF_LOG_MODE, value: console}
+            - {name: GF_ANALYTICS_REPORTING_ENABLED, value: "false"}
+            - {name: GF_ANALYTICS_CHECK_FOR_UPDATES, value: "false"}
+            - {name: GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES, value: "false"}
+            - {name: GF_NEWS_NEWS_FEED_ENABLED, value: "false"}
+          ports: [{name: http, containerPort: 3000}]
+          readinessProbe: {httpGet: {path: /api/health, port: http}, periodSeconds: 5}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/grafana}
+            - {name: tmp, mountPath: /tmp}
+            - {name: provisioning, mountPath: /etc/grafana/provisioning/datasources/datasources.yaml, subPath: datasources.yaml}
+            - {name: provisioning, mountPath: /etc/grafana/provisioning/dashboards/dashboards.yaml, subPath: dashboards.yaml}
+            - {name: dashboards, mountPath: /var/lib/grafana/dashboards}
+      volumes:
+        - name: data
+          emptyDir: {sizeLimit: 512Mi}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+        - name: provisioning
+          configMap: {name: grafana-provisioning}
+        - name: dashboards
+          configMap: {name: grafana-dashboards}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: lab-monitoring
+spec:
+  selector: {app: grafana}
+  ports:
+    - {name: http, port: 3000, targetPort: http}

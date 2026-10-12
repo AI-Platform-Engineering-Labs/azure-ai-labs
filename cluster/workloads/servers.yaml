@@ -1,0 +1,111 @@
+# Lab MCP servers and their MCPServer registrations. The Operator validates each MCPServer
+# and the Gateway routes /mcp/<namespace>.<name> to its endpoint (endpoint includes /mcp).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments-mcp
+  namespace: team-payments
+  labels: {app: payments-mcp, lab.kavrynt.io/role: mcp-server}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: payments-mcp}
+  template:
+    metadata:
+      labels: {app: payments-mcp, lab.kavrynt.io/role: mcp-server}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: server
+          image: kavrynt-lab:local
+          imagePullPolicy: IfNotPresent
+          args: [server, --persona, payments]
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5}
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 64Mi}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payments-mcp
+  namespace: team-payments
+spec:
+  selector: {app: payments-mcp}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+apiVersion: kavrynt.io/v1alpha1
+kind: MCPServer
+metadata:
+  name: payments-mcp
+  namespace: team-payments
+  annotations:
+    kavrynt.io/description: Payments and customer data (lab)
+    kavrynt.io/owner: payments-team
+spec:
+  version: 0.1.0
+  transport: http
+  endpoint: http://payments-mcp.team-payments.svc.cluster.local:8080/mcp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: support-mcp
+  namespace: team-support
+  labels: {app: support-mcp, lab.kavrynt.io/role: mcp-server}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: support-mcp}
+  template:
+    metadata:
+      labels: {app: support-mcp, lab.kavrynt.io/role: mcp-server}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: server
+          image: kavrynt-lab:local
+          imagePullPolicy: IfNotPresent
+          args: [server, --persona, support]
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5}
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 64Mi}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: support-mcp
+  namespace: team-support
+spec:
+  selector: {app: support-mcp}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+apiVersion: kavrynt.io/v1alpha1
+kind: MCPServer
+metadata:
+  name: support-mcp
+  namespace: team-support
+  annotations:
+    kavrynt.io/description: Customer support desk (lab)
+    kavrynt.io/owner: support-team
+spec:
+  version: 0.1.0
+  transport: http
+  endpoint: http://support-mcp.team-support.svc.cluster.local:8080/mcp
