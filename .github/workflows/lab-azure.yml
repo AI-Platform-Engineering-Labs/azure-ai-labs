@@ -236,7 +236,7 @@ jobs:
             xargs -r -I{} gh issue close {} --repo "$GITHUB_REPOSITORY" --comment "Run cancelled; nothing was applied."
 
   apply:
-    name: ${{ needs.plan.outputs.mode == 'destroy' && 'Destroy' || 'Apply and deploy' }}
+    name: Apply (create and deploy, or destroy)
     needs: [plan, approval]
     if: >-
       !cancelled() && needs.plan.result == 'success' && github.event_name != 'pull_request' &&
