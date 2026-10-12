@@ -1,0 +1,94 @@
+# Kavrynt Labs - plan
+
+A disposable lab where the Kavrynt MCP control plane runs against real MCP servers and
+agents, so governance can be watched as it happens - and every runtime and Cloud feature
+is proven end to end before customers see it. The lab can be deleted at any time; nothing
+in it is a customer or production system.
+
+## Decisions (2026-10-11)
+
+| Question | Decision |
+|---|---|
+| Azure subscription | **Same subscription as Kavrynt Cloud dev**, with its own resource group, GitHub identity and budget |
+| Cloud side | **Connect the lab to the existing Kavrynt Cloud dev** on Azure (`kavrynt-platform`), so the real cluster-to-Cloud path is exercised |
+| Cluster-to-Cloud connector | **Built in the `kavrynt` runtime as a real feature**, not a lab shim - customers need it too |
+| First step | Phase 1: the same lab on a local Kind cluster |
+
+## What the lab looks like
+
+```mermaid
+flowchart LR
+    subgraph gh["GitHub Actions (OIDC, no secrets)"]
+        up["lab-up / lab-down / TTL reaper"]
+        sc["scenario suite"]
+    end
+    subgraph az["Azure: rg-kavrynt-lab (deletable)"]
+        subgraph aks["AKS (Kind locally)"]
+            gw["Kavrynt Gateway"]
+            op["Kavrynt Operator"]
+            srv["Lab MCP servers<br/>team-payments, team-support"]
+            ag["Agents<br/>support, payments, rogue"]
+            mon["Prometheus + Grafana"]
+            conn["Cloud connector<br/>(runtime feature)"]
+        end
+    end
+    cloud["Kavrynt Cloud dev<br/>registry, audit, usage, UI"]
+    idp["Zitadel<br/>agent identities"]
+    ag -- "MCP via Gateway" --> gw --> srv
+    op -- "MCPServer status" --> gw
+    conn -- "servers, tools, call events" --> cloud
+    idp -. "tokens (Phase 4)" .-> ag
+    up --> az
+    sc --> gw
+    mon --> gw
+    mon --> ag
+```
+
+## Where governance stands today
+
+| Capability | Status | Lives in |
+|---|---|---|
+| Register MCP servers, readiness, routing | Works (`0.0.2-beta.1`) | `kavrynt` |
+| Inventory of servers and tools, audit events, usage, Control UI | API + UI exist; filled only through `POST /v1/sync/mcpservers`, `/v1/audit-events`, `/v1/usage-events` | `kavrynt-cloud` |
+| Cluster to Cloud sync | Missing: nothing in the runtime calls the sync API | to build in `kavrynt` (Phase 3) |
+| Gateway authentication, policy (OPA), per-call audit | Design only (ADR-0003) | to build in `kavrynt` (Phase 4) |
+| Approvals | Target service | to build in `kavrynt-cloud` (Phase 4) |
+
+The lab encodes the governance we *want* in [`policies/expectations.yaml`](../policies/expectations.yaml)
+and measures the gap: every call that policy would deny but the runtime allowed is
+counted and shown. As enforcement lands, that gap goes to zero.
+
+## Phases
+
+| Phase | Delivers | Done when | Status |
+|---|---|---|---|
+| **1. Local lab** | Kind cluster, Kavrynt runtime (release or local source), lab MCP servers with tools at every risk level, scripted agents incl. a rogue one, Prometheus + Grafana governance dashboard, `make lab-up / lab-check / lab-down`, CI that runs the lab on Kind | `make lab-up` then `make lab-check` pass; Grafana shows routing, calls per agent and tool, and the ungoverned-risk gap | **done** (release and source runtime, 2026-10-11; hardened and re-verified 2026-10-12) |
+| **2. Azure** | Landing zone in `kavrynt-platform` (`landing-zone/lab.tf`: lab resource group, `id-kavrynt-github-lab`, state container, budget); lab stack `infra/azure` (one-node AKS Free tier with Entra ID and Azure RBAC, Basic registry; Azure Verified Modules); **Azure Lab** workflow: `up` with approval, `down`, TTL reaper; runbooks | A full create -> check -> destroy from GitHub, cost back to ~0 when down | **built** (2026-10-12); first Azure run after the landing zone is applied ([azure-setup.md](runbooks/azure-setup.md)) |
+| **3. Visibility** | Connector in the runtime: sync MCPServers and their tools (`tools/list`) and per-call usage/audit events to Kavrynt Cloud with a cluster token; lab registered as a cluster in Cloud dev | Calls made in the lab appear in the Cloud UI within seconds | planned |
+| **4. Enforcement** | Gateway as OAuth resource server (Zitadel tokens per agent), embedded OPA policies, approvals; scenario suite as acceptance tests | Scenario suite passes: allow, deny and approval outcomes match `expectations.yaml`, every call audited | planned |
+
+## Components
+
+| Component | Where | Notes |
+|---|---|---|
+| Kind cluster | `kind/cluster.yaml` | Grafana, Prometheus and the Gateway exposed on `127.0.0.1` |
+| Azure lab | `infra/azure/`, `.github/workflows/lab-azure.yml` | AKS + registry in `rg-kavrynt-lab`; nothing exposed, reached through `kubectl port-forward`; same manifests and checks as Kind (`TARGET=aks`) |
+| Kavrynt runtime | `RUNTIME=release` (public Docker Hub chart + images, pinned by digest in `scripts/lab.sh`; default) or `RUNTIME=source` (builds `../kavrynt`, Kind only) | `source` is the real-time loop for runtime development: change Go code, `make runtime-reload` |
+| Lab MCP servers | `lab/` (Python, MCP SDK 2.x, protocol `2026-07-28`) | `payments-mcp` and `support-mcp`, tools from read-only to destructive, with MCP tool annotations and Kavrynt risk metadata |
+| Agents | `lab/` | `support-agent`, `payments-agent`, `rogue-agent`; each call carries `X-Lab-Agent` and is scored against the expectations |
+| Expected governance | `policies/expectations.yaml` | The policy we intend Kavrynt to enforce; source for the dashboard gap today and the scenario suite later |
+| Monitoring | `cluster/monitoring/` | Prometheus (pod discovery: Kavrynt Gateway and Operator, plus `prometheus.io/*` annotated lab pods) and Grafana with the governance dashboard |
+| Checks | `lab/` (`kavrynt-lab check`, run as a Job) | Routes registered, tools reachable through Gateway, metrics flowing |
+
+## Cost and deletion
+
+- Local lab: free. `make lab-down` deletes the Kind cluster and everything in it.
+- Azure lab: about USD 0.15 an hour while up (one `Standard_B2s_v2` node, disk, outbound load
+  balancer, Basic registry; AKS Free tier); about zero when down - the resource group, budget,
+  state container and identity remain. The TTL reaper destroys a lab at most two hours after its
+  TTL; the budget on `rg-kavrynt-lab` alerts the subscription Owners.
+
+## Findings
+
+Things the lab exposes about the runtime and Cloud are recorded in [FINDINGS.md](FINDINGS.md)
+and fed back to the owning repository as issues.

@@ -1,0 +1,19 @@
+# Each team owns a namespace; Kavrynt routes are namespace-qualified (<namespace>.<name>).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-payments
+  labels:
+    lab.kavrynt.io/team: payments
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-support
+  labels:
+    lab.kavrynt.io/team: support
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: lab-agents

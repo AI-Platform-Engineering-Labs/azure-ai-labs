@@ -1,0 +1,49 @@
+# The governance we intend Kavrynt to enforce, per agent and tool.
+#
+#   allow    - the call should succeed
+#   deny     - the Gateway should refuse it (403)
+#   approve  - it should wait for a human approval
+#
+# Today the runtime enforces none of this (ADR-0003 is design only), so the lab counts
+# every call whose expected decision is deny/approve but which went through anyway: the
+# "ungoverned" gap on the dashboard. When enforcement lands, the same file becomes the
+# scenario acceptance suite.
+#
+# Rules are checked in order; the first match wins. Patterns: "*" or an exact name.
+
+default: deny
+
+rules:
+  # Support team: full use of the support desk, except deleting tickets.
+  - agent: support-agent
+    server: team-support.support-mcp
+    tool: delete_ticket
+    decision: approve
+  - agent: support-agent
+    server: team-support.support-mcp
+    tool: "*"
+    decision: allow
+  - agent: support-agent
+    server: team-payments.payments-mcp
+    tool: search_payments
+    decision: allow
+
+  # Payments team: reads freely; refunds need approval; bulk exports are never allowed.
+  - agent: payments-agent
+    server: team-payments.payments-mcp
+    tool: refund_payment
+    decision: approve
+  - agent: payments-agent
+    server: team-payments.payments-mcp
+    tool: export_customer_data
+    decision: deny
+  - agent: payments-agent
+    server: team-payments.payments-mcp
+    tool: "*"
+    decision: allow
+
+  # The rogue agent may only read tickets; everything else should be refused.
+  - agent: rogue-agent
+    server: team-support.support-mcp
+    tool: search_tickets
+    decision: allow

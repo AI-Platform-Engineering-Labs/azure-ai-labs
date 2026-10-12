@@ -1,0 +1,14 @@
+# Rendered with: kubectl kustomize --load-restrictor=LoadRestrictionsNone cluster/workloads
+# (the expectations file lives in policies/, outside this directory). The hashed ConfigMap
+# name rolls the agents whenever policies/expectations.yaml changes.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespaces.yaml
+  - servers.yaml
+  - agents.yaml
+configMapGenerator:
+  - name: lab-expectations
+    namespace: lab-agents
+    files:
+      - expectations.yaml=../../policies/expectations.yaml

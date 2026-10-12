@@ -1,0 +1,14 @@
+# Trivy findings accepted on purpose, each with its reason. Prefer fixing over ignoring.
+misconfigurations:
+  - id: KSV-0125
+    paths:
+      - cluster/monitoring/grafana.yaml
+      - cluster/monitoring/prometheus.yaml
+    statement: >-
+      Grafana and Prometheus publish only to Docker Hub and Quay. Both images are pinned by
+      digest, so the reference cannot move.
+  - id: DS-0026
+    paths:
+      - lab/Dockerfile
+    statement: >-
+      Kubernetes ignores Docker HEALTHCHECK; the lab pods use readiness probes.

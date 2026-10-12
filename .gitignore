@@ -1,0 +1,16 @@
+.cache/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+kubeconfig*
+*.kubeconfig
+.env
+.terraform/
+*.tfplan
+*.tfstate
+*.tfstate.*
+plan.txt
+local.tfvars

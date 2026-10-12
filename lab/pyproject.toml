@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling==1.32.4"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kavrynt-lab"
+version = "0.1.0"
+description = "Lab MCP servers, agents and checks for exercising the Kavrynt MCP control plane."
+requires-python = ">=3.12"
+dependencies = [
+  "mcp>=2.3,<3",
+  "prometheus-client>=0.20",
+  "pyyaml>=6.0",
+  "uvicorn>=0.30",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "ruff>=0.6"]
+
+[project.scripts]
+kavrynt-lab = "kavrynt_lab.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kavrynt_lab"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC", "RUF"]
+# `timeout` parameters here are HTTP client timeouts and polling deadlines, not cancellation.
+ignore = ["ASYNC109"]
