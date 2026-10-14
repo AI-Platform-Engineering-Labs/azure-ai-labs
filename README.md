@@ -87,4 +87,4 @@ make tf-check     # terraform fmt + validate for infra/azure (Terraform 1.12+)
 
 The lab package (`lab/`) is one image with three roles: `kavrynt-lab server`, `agent` and
 `check`. CI (`.github/workflows/lab.yml`) runs all of the above, a Trivy scan, and the whole
-lab on Kind. Repository rules for people and coding agents are in [AGENTS.md](AGENTS.md).
+lab on Kind. Repository rules for people and coding agents are in [CLAUDE.md](CLAUDE.md).
