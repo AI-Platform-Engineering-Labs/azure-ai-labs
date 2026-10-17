@@ -95,7 +95,7 @@ Terraform 1.12+ for `tf-check`.
   run), who comment exactly `approve` or `deny`. Azure jobs are skipped until
   `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` are set
   (docs/runbooks/azure-setup.md).
-- Cost: about USD 0.15 an hour while up, about zero while down.
+- Cost: about USD 0.20 an hour while up, about zero while down.
 
 ## Branching
 

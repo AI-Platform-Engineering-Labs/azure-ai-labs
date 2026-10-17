@@ -44,7 +44,7 @@ subscription, deploys the same lab, runs the same checks, and destroys it again:
 | `down` | destroy, then a check that nothing is left; no approval |
 | TTL reaper (every 2 h) | destroys the lab once its TTL has passed |
 
-About USD 0.15 an hour while up, about zero while down. Nothing is exposed publicly; you
+About USD 0.20 an hour while up, about zero while down. Nothing is exposed publicly; you
 connect with `kubectl port-forward`. One-time setup: [azure-setup.md](docs/runbooks/azure-setup.md);
 daily use: [azure-lab.md](docs/runbooks/azure-lab.md).
 
