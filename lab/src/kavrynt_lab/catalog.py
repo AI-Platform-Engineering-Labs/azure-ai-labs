@@ -43,6 +43,11 @@ class ServerSpec:
         """Gateway route id: <namespace>.<name>."""
         return f"{self.namespace}.{self.name}"
 
+    @property
+    def direct_url(self) -> str:
+        """The server's own Service, around the Gateway. NetworkPolicy should refuse it."""
+        return f"http://{self.name}.{self.namespace}.svc.cluster.local:8080/mcp"
+
 
 PAYMENTS = ServerSpec(
     persona="payments",

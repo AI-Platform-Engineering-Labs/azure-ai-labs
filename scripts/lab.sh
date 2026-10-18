@@ -3,6 +3,8 @@
 #
 #   scripts/lab.sh up               install Kavrynt, monitoring and the lab (Kind: create the cluster first)
 #   scripts/lab.sh check            run the in-cluster end-to-end checks (Job lab-check)
+#   scripts/lab.sh integrations     AKS: workload identity + Key Vault wiring, then check it and
+#                                   Kavrynt Cloud reachability (Job lab-integrations-check)
 #   scripts/lab.sh reload           Kind: rebuild the lab image and re-apply manifests/expectations
 #   scripts/lab.sh runtime-reload   reinstall Kavrynt (rebuilds images when RUNTIME=source)
 #   scripts/lab.sh status           pods, MCPServers, routes and how to reach Grafana
@@ -19,6 +21,9 @@
 #   KUBE_CONTEXT             AKS: kubectl context (az aks get-credentials); Kind: kind-$CLUSTER
 #   CLUSTER                  Kind cluster name (default kavrynt-lab)
 #   WAIT_TIMEOUT             rollout wait per deployment (default 300s)
+#   integrations (outputs of infra/azure/integrations, set by the Lab Integrations workflow):
+#   KEY_VAULT_NAME AZURE_TENANT_ID WORKLOAD_CLIENT_ID CANARY_SECRET_NAME CANARY_SECRET_VALUE
+#   CLOUD_API_URL
 set -euo pipefail
 shopt -s inherit_errexit
 
@@ -63,6 +68,10 @@ require() {
 
 kind_only() {
   [[ "$TARGET" == kind ]] || die "$1 is Kind only. On AKS use the Azure Lab workflow (docs/runbooks/azure-lab.md)."
+}
+
+aks_only() {
+  [[ "$TARGET" == aks ]] || die "$1 is AKS only: it needs the lab Key Vault and workload identity (docs/runbooks/azure-lab.md)."
 }
 
 python_cmd() {
@@ -324,32 +333,70 @@ cmd_runtime_reload() {
   log "Kavrynt reinstalled (runtime: $RUNTIME)"
 }
 
-cmd_check() {
-  require kubectl
-  require_cluster
-  LAB_IMAGE="$(deployed_lab_image)" || die "the lab is not deployed - run: scripts/lab.sh up"
-  log "Running lab-check Job ($LAB_IMAGE)"
-  k -n lab-agents delete job lab-check --ignore-not-found --wait >/dev/null
-  render "$ROOT/cluster/workloads/check-job.yaml" | k apply -f - >/dev/null
+# run_job NAME: re-creates Job NAME in lab-agents from the manifest on stdin, waits for it and
+# prints its log. Fails when the Job fails or does not finish within 300s.
+run_job() {
+  local name="$1"
+  k -n lab-agents delete job "$name" --ignore-not-found --wait >/dev/null
+  k apply -f - >/dev/null
 
   # A transient API error only means another poll.
   local deadline=$((SECONDS + 300)) succeeded="" failed=""
   while ((SECONDS < deadline)); do
-    succeeded="$(k -n lab-agents get job lab-check -o jsonpath='{.status.succeeded}' 2>/dev/null || true)"
-    failed="$(k -n lab-agents get job lab-check -o jsonpath='{.status.failed}' 2>/dev/null || true)"
+    succeeded="$(k -n lab-agents get job "$name" -o jsonpath='{.status.succeeded}' 2>/dev/null || true)"
+    failed="$(k -n lab-agents get job "$name" -o jsonpath='{.status.failed}' 2>/dev/null || true)"
     if [[ "${succeeded:-0}" -ge 1 || "${failed:-0}" -ge 1 ]]; then
       break
     fi
     sleep 3
   done
-  k -n lab-agents logs job/lab-check || true
+  k -n lab-agents logs "job/$name" || true
   if [[ "${succeeded:-0}" -ge 1 ]]; then
     log "All checks passed"
   elif [[ "${failed:-0}" -ge 1 ]]; then
     die "checks failed"
   else
-    die "lab-check did not finish within 300s"
+    # Usually a pod that never started, e.g. a volume that could not be mounted.
+    k -n lab-agents describe pods -l "job-name=$name" | sed -n '/^Events:/,$p' || true
+    die "$name did not finish within 300s"
   fi
+}
+
+cmd_check() {
+  require kubectl
+  require_cluster
+  LAB_IMAGE="$(deployed_lab_image)" || die "the lab is not deployed - run: scripts/lab.sh up"
+  log "Running lab-check Job ($LAB_IMAGE)"
+  render "$ROOT/cluster/workloads/check-job.yaml" | run_job lab-check
+}
+
+# Placeholders in cluster/integrations/*.yaml, filled from outputs of infra/azure/integrations.
+INTEGRATION_VARS=(WORKLOAD_CLIENT_ID AZURE_TENANT_ID KEY_VAULT_NAME CANARY_SECRET_NAME
+                  CANARY_SECRET_VALUE CLOUD_API_URL)
+
+# fill FILE: an integrations manifest with its ${VAR} placeholders replaced.
+fill() {
+  local yaml var
+  yaml="$(render "$1")"
+  for var in "${INTEGRATION_VARS[@]}"; do
+    yaml="${yaml//\$\{$var\}/${!var}}"
+  done
+  printf '%s\n' "$yaml"
+}
+
+cmd_integrations() {
+  aks_only integrations
+  require kubectl
+  require_cluster
+  local var
+  for var in "${INTEGRATION_VARS[@]}"; do
+    [[ -n "${!var:-}" ]] || die "$var is not set (an output of infra/azure/integrations)"
+  done
+  LAB_IMAGE="$(deployed_lab_image)" || die "the lab is not deployed - run the Azure Lab workflow first"
+  log "Applying the lab workload identity and Key Vault wiring ($KEY_VAULT_NAME)"
+  fill "$ROOT/cluster/integrations/workload.yaml" | k apply -f - >/dev/null
+  log "Running lab-integrations-check Job ($LAB_IMAGE)"
+  fill "$ROOT/cluster/integrations/check-job.yaml" | run_job lab-integrations-check
 }
 
 cmd_status() {
@@ -399,8 +446,9 @@ case "${1:-}" in
   down) cmd_down ;;
   clean) cmd_clean ;;
   check) cmd_check ;;
+  integrations) cmd_integrations ;;
   reload) cmd_reload ;;
   runtime-reload) cmd_runtime_reload ;;
   status) cmd_status ;;
-  *) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

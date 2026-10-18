@@ -10,6 +10,9 @@
 # scenario acceptance suite.
 #
 # Rules are checked in order; the first match wins. Patterns: "*" or an exact name.
+# Calls that skip the Gateway and go straight to a server's Service are scored as server
+# "direct:<namespace>.<name>". No rule names such a server, so they are always denied;
+# NetworkPolicy (cluster/workloads/network-policies.yaml) is what enforces it today.
 
 default: deny
 

@@ -22,7 +22,7 @@ terraform {
     }
   }
 
-  # Partial configuration: terraform -chdir=infra/azure init -backend-config=backend.hcl
+  # Partial configuration: terraform -chdir=infra/azure/cluster init -backend-config=backend.hcl
   backend "azurerm" {}
 }
 

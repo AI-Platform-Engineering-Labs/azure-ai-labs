@@ -30,7 +30,7 @@ section instead of creating a duplicate.
 Add a row to the table with the next number:
 
 ```markdown
-| F10 | <short title> | medium | `kavrynt` | open |
+| F11 | <short title> | medium | `kavrynt` | open |
 ```
 
 Status values: `open`, `open (Phase N)` when a planned phase fixes it, `worked around`, `fixed`.
@@ -38,7 +38,7 @@ Status values: `open`, `open (Phase N)` when a planned phase fixes it, `worked a
 Then a section in the same style as the others:
 
 ```markdown
-## F10. <Short title>
+## F11. <Short title>
 
 <What happens and why, with file:line references.>
 
@@ -49,7 +49,7 @@ Then a section in the same style as the others:
 ## 4. Draft the issue
 
 Write the issue for the owning repository (title, the evidence, the proposed fix, a link back to
-`kavrynt-labs/docs/FINDINGS.md#f10-...`). Show it to the owner. **Create it only when asked**:
+`azure-ai-labs/docs/FINDINGS.md#f11-...`). Show it to the owner. **Create it only when asked**:
 
 ```bash
 gh issue create -R kavrynt/<repo> --title "…" --body-file /tmp/finding.md

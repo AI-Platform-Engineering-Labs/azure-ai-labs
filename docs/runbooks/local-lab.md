@@ -57,6 +57,7 @@ status of the `tools/call` request.
 | `kind create cluster` fails on ports | Something else uses 3000, 9090 or 18080. Stop it, then `make lab-up`. |
 | A deployment is not ready | `kubectl --context kind-kavrynt-lab -n <ns> describe deployment <name>` and the pod events. |
 | `lab-check` fails on metrics | Prometheus needs a few scrapes after a fresh start. Run `make lab-check` again after a minute. |
+| `lab-check` fails *direct call around the gateway is blocked* | The cluster does not enforce NetworkPolicy. kindnet in kind 0.31 does (verified); with an older kind, upgrade and recreate the cluster (`make lab-down && make lab-up`). Check `kubectl --context kind-kavrynt-lab get networkpolicies -A`. |
 | Dashboard panels are empty | Same as above; also check http://localhost:9090/targets (all targets should be up). |
 
 ## Delete it

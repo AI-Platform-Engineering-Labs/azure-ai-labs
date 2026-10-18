@@ -6,14 +6,15 @@ PYTHON ?= $(shell python3 -c 'import sys' >/dev/null 2>&1 && echo python3 || ech
 # Resolved when a recipe line runs, so it also works right after `make venv` creates it.
 VENV_PY = $$( [ -x lab/.venv/Scripts/python.exe ] && echo lab/.venv/Scripts/python.exe || echo lab/.venv/bin/python )
 TF ?= terraform
-TF_DIR := infra/azure
+# The Azure lab stacks, in the order their workflows apply them.
+TF_STACKS := infra/azure/landing-zone infra/azure/cluster infra/azure/integrations
 
 .PHONY: help
 help:
 	@echo "make venv           create lab/.venv with the lab package and dev tools"
 	@echo "make test           lint and unit tests for the lab package"
 	@echo "make validate       render the Kubernetes manifests, check the scripts"
-	@echo "make tf-check       terraform fmt and validate for infra/azure (no Azure access)"
+	@echo "make tf-check       terraform fmt and validate for the infra/azure stacks (no Azure access)"
 	@echo "make lab-up         Kind cluster + Kavrynt + monitoring + lab (RUNTIME=release|source)"
 	@echo "make lab-check      in-cluster end-to-end checks"
 	@echo "make lab-status     pods, MCPServers, Gateway routes and URLs"
@@ -21,7 +22,7 @@ help:
 	@echo "make runtime-reload reinstall Kavrynt (rebuilds images with RUNTIME=source)"
 	@echo "make lab-down       delete the Kind cluster"
 	@echo "make clean          lab-down, then remove lab images and .cache"
-	@echo "Azure lab: GitHub Actions 'Azure Lab' workflow (docs/runbooks/azure-lab.md)"
+	@echo "Azure lab: workflows Lab Landing Zone -> Azure Lab -> Lab Integrations (docs/runbooks/azure-lab.md)"
 
 .PHONY: venv
 venv:
@@ -36,14 +37,18 @@ test:
 validate:
 	kubectl kustomize cluster/monitoring >/dev/null
 	kubectl kustomize --load-restrictor=LoadRestrictionsNone cluster/workloads >/dev/null
+	"$$(pwd)/$(VENV_PY)" -c 'import sys, yaml; [list(yaml.safe_load_all(open(f, encoding="utf-8"))) for f in sys.argv[1:]]' \
+		cluster/integrations/*.yaml .github/workflows/*.yml .github/actions/*/action.yml
 	bash -n scripts/lab.sh
 	bash -n .github/actions/approval/approve.sh
 
 .PHONY: tf-check
 tf-check:
 	$(TF) fmt -check -recursive infra
-	$(TF) -chdir=$(TF_DIR) init -backend=false -input=false >/dev/null
-	$(TF) -chdir=$(TF_DIR) validate
+	@for stack in $(TF_STACKS); do \
+		echo "validate $$stack"; \
+		$(TF) -chdir=$$stack init -backend=false -input=false >/dev/null && $(TF) -chdir=$$stack validate -no-color || exit 1; \
+	done
 
 .PHONY: lab-up lab-check lab-status lab-reload runtime-reload lab-down clean
 lab-up:

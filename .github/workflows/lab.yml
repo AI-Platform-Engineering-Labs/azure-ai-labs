@@ -64,7 +64,7 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Format and validate infra/azure
+      - name: Format and validate the infra/azure stacks
         run: make tf-check
 
       # Terraform, Kubernetes manifests and the Dockerfile. Accepted findings are listed with
@@ -76,7 +76,7 @@ jobs:
           scan-type: config
           scan-ref: .
           skip-dirs: lab/.venv,.cache
-          tf-vars: infra/azure/terraform.tfvars
+          tf-vars: infra/azure/landing-zone/terraform.tfvars,infra/azure/cluster/terraform.tfvars,infra/azure/integrations/terraform.tfvars
           trivyignores: .trivyignore.yaml
           severity: LOW,MEDIUM,HIGH,CRITICAL
           exit-code: 1

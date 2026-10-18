@@ -1,0 +1,98 @@
+name: Terraform plan
+description: >-
+  Plans one lab stack (infra/azure/<stack>) with its terraform.tfvars, writes the summary to
+  the run, and saves plan, text and summary as an artifact for the approval and apply jobs.
+  Terraform must be set up and Azure OIDC variables (ARM_*) set by the caller; TF_VAR_* in the
+  job environment reach the plan.
+
+inputs:
+  stack:
+    description: Stack directory, e.g. infra/azure/cluster.
+    required: true
+  mode:
+    description: apply or destroy.
+    required: true
+  title:
+    description: Heading of the plan summary.
+    required: true
+  artifact:
+    description: Artifact name for the saved plan; empty to save nothing (pull requests).
+    required: false
+    default: lab-plan
+  approval-free-types:
+    description: >-
+      Comma-separated resource types whose changes alone never need approval. Any other
+      change sets needs-approval to true.
+    required: false
+    default: ""
+
+outputs:
+  changes:
+    description: Number of resources the plan changes.
+    value: ${{ steps.summary.outputs.changes }}
+  needs-approval:
+    description: true when the plan changes anything outside approval-free-types.
+    value: ${{ steps.summary.outputs.needs-approval }}
+
+runs:
+  using: composite
+  steps:
+    - name: Plan
+      shell: bash
+      env:
+        STACK: ${{ inputs.stack }}
+        MODE: ${{ inputs.mode }}
+      run: |
+        destroy=()
+        if [ "${MODE}" = destroy ]; then destroy=(-destroy); fi
+        terraform -chdir="${STACK}" init -input=false -backend-config=backend.hcl
+        terraform -chdir="${STACK}" plan -lock-timeout=5m "${destroy[@]}" \
+          -var-file=terraform.tfvars -out=lab.tfplan
+
+    # Plans hold no secrets (write-only secret values never reach them), so they can be artifacts.
+    - name: Summarize plan
+      id: summary
+      shell: bash
+      env:
+        STACK: ${{ inputs.stack }}
+        TITLE: ${{ inputs.title }}
+        FREE_TYPES: ${{ inputs.approval-free-types }}
+      run: |
+        mkdir -p plan-out
+        terraform -chdir="${STACK}" show -no-color lab.tfplan > plan-out/plan.txt
+        terraform -chdir="${STACK}" show -json lab.tfplan > plan.json
+        changed='[.resource_changes[]? | select(.change.actions != ["no-op"] and .change.actions != ["read"])]'
+        changes=$(jq "${changed} | length" plan.json)
+        gated=$(jq --arg free "${FREE_TYPES}" \
+          "(\$free | split(\",\") | map(select(length > 0))) as \$f | ${changed} | map(select(.type as \$t | \$f | index(\$t) | not)) | length" plan.json)
+        echo "changes=${changes}" >> "$GITHUB_OUTPUT"
+        echo "needs-approval=$([ "${gated}" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+        {
+          echo "### ${TITLE}"
+          echo
+          grep -E '^Plan:|^No changes' plan-out/plan.txt || true
+          echo
+          echo '```'
+          grep -E '^  # ' plan-out/plan.txt || true
+          echo '```'
+        } > plan-out/summary.md
+        {
+          cat plan-out/summary.md
+          echo
+          echo "<details><summary>Full plan</summary>"
+          echo
+          echo '```'
+          cat plan-out/plan.txt
+          echo '```'
+          echo "</details>"
+        } >> "$GITHUB_STEP_SUMMARY"
+        cp "${STACK}/lab.tfplan" plan-out/plan.tfplan
+
+    - name: Save plan
+      if: inputs.artifact != ''
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ inputs.artifact }}
+        path: plan-out/
+        retention-days: 1
+        if-no-files-found: error

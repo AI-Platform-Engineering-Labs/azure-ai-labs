@@ -15,6 +15,7 @@ repository that owns the fix; open an issue there and link it here. Code referen
 | F7 | Gateway errors are plain JSON, not MCP errors | medium | `kavrynt` | open |
 | F8 | Stale packaged subcharts in a checkout render extra Deployments | low | `kavrynt` | open |
 | F9 | `helm pull` of the public chart fails with a stale Docker Hub login | low | docs | worked around |
+| F10 | Nothing stops callers from going around the Gateway | high | `kavrynt` | worked around (lab NetworkPolicy) |
 
 ## F1. Any caller can use any registered MCP server
 
@@ -116,3 +117,25 @@ reads Docker's credential store, and a stale Docker Hub login turns an anonymous
 
 **Workaround:** `scripts/fetch_chart.py` downloads the chart anonymously through the registry
 API and checks the pinned digest. Worth a line in the install docs.
+
+## F10. Nothing stops callers from going around the Gateway
+
+Every `MCPServer` endpoint is an ordinary Kubernetes Service (`spec.endpoint`,
+`api/v1alpha1/mcpserver_types.go:37`), and nothing in the runtime limits who may reach it.
+ADR-0003 (*Gateway bypass*, `docs/ADR-0003-Runtime-Authorization.md:90-94`) says the chart
+ships an optional NetworkPolicy so that MCP server pods accept traffic only from the Gateway,
+but no chart or operator code renders one (`kavrynt` at `76f3259`, newer than the commit in
+this file's header). Whatever the Gateway enforces later (F1, F2) can be skipped by calling
+`http://<server>.<namespace>.svc:<port>/mcp` directly.
+
+**Seen in the lab:** the lab servers, like any MCP server behind the Gateway, answer whoever
+reaches them, and until `cluster/workloads/network-policies.yaml` nothing in the cluster
+limited who could. With that policy, the `rogue-agent` step that calls the
+Service directly is scored as server `direct:team-payments.payments-mcp`, ends in `timeout`,
+and `kavrynt-lab check` passes *direct call around the gateway is blocked* (Kind with kindnet,
+AKS with Cilium). The dashboard's *Calls around the Gateway* panel stays at zero.
+**Fix:** ship the NetworkPolicy ADR-0003 describes (chart value, off by default, selecting
+labelled MCP server pods and allowing only the Gateway and the Operator), say in the install
+docs that governance is only as strong as that policy, and consider an Operator condition on
+`MCPServer` that reports when no policy protects the endpoint. The lab's policy is the
+reference.

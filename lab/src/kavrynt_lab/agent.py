@@ -19,7 +19,7 @@ import httpx2
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 
-from kavrynt_lab.catalog import PAYMENTS, SUPPORT
+from kavrynt_lab.catalog import PAYMENTS, ROUTES, SUPPORT
 from kavrynt_lab.expectations import Expectations
 from kavrynt_lab.metrics import AGENT_CALLS, AGENT_SECONDS, OVERBLOCKED, UNGOVERNED
 
@@ -27,6 +27,10 @@ log = logging.getLogger("kavrynt_lab.agent")
 AGENT_HEADER = "X-Lab-Agent"
 REACHED_TOOL = ("ok", "tool_error")
 REFUSED = ("denied", "unauthenticated", "pending_approval")
+# Calls straight to a server's Service, around the Gateway, are scored under this route prefix.
+# No expectations rule names such a route, so policy always says deny.
+DIRECT = "direct:"
+DIRECT_TIMEOUT = 3.0  # a blocked connection is dropped: give up quickly
 
 ArgsFactory = Callable[[random.Random], dict[str, Any]]
 
@@ -37,6 +41,11 @@ class Step:
     tool: str
     weight: float
     args: ArgsFactory
+    direct: bool = False  # call the server's Service, bypassing the Gateway
+
+    @property
+    def scored_route(self) -> str:
+        return f"{DIRECT}{self.route}" if self.direct else self.route
 
 
 @dataclass(frozen=True)
@@ -134,6 +143,7 @@ PERSONAS: dict[str, Persona] = {
                 Step(P, "export_customer_data", 2, _export),
                 Step(P, "get_customer", 1, _customer),
                 Step(UNREGISTERED, "read_ledger", 1, lambda r: {}),
+                Step(P, "get_customer", 1, _customer, direct=True),
             ),
         ),
     )
@@ -203,9 +213,16 @@ def _rpc_method(body: bytes) -> str:
 
 
 async def call_tool(
-    gateway: str, agent: str, route: str, tool: str, args: dict[str, Any], timeout: float = 15
+    gateway: str,
+    agent: str,
+    route: str,
+    tool: str,
+    args: dict[str, Any],
+    timeout: float = 15,
+    url: str | None = None,
 ) -> tuple[str, int | None, str]:
-    """Call one tool through the Gateway. Returns (outcome, HTTP status, detail).
+    """Call one tool through the Gateway, or at `url` when given. Returns (outcome, HTTP
+    status, detail).
 
     The MCP client hides HTTP statuses, so a response hook records them per JSON-RPC method:
     the session also sends discovery and `tools/list` requests, and only the `tools/call`
@@ -228,7 +245,7 @@ async def call_tool(
     http = httpx2.AsyncClient(
         headers={AGENT_HEADER: agent}, timeout=timeout, event_hooks={"response": [record]}
     )
-    url = f"{gateway.rstrip('/')}/mcp/{route}"
+    url = url or f"{gateway.rstrip('/')}/mcp/{route}"
     error: BaseException | None = None
     is_error = False
     detail = ""
@@ -252,22 +269,24 @@ async def act_once(
     persona: Persona, gateway: str, expectations: Expectations, rng: random.Random
 ) -> CallResult:
     step = rng.choices(persona.steps, weights=[s.weight for s in persona.steps])[0]
-    expected = expectations.decide(persona.name, step.route, step.tool)
+    route = step.scored_route
+    expected = expectations.decide(persona.name, route, step.tool)
+    direct: dict[str, Any] = {}
+    if step.direct:
+        direct = {"url": ROUTES[step.route].direct_url, "timeout": DIRECT_TIMEOUT}
     started = time.perf_counter()
     outcome, status, detail = await call_tool(
-        gateway, persona.name, step.route, step.tool, step.args(rng)
+        gateway, persona.name, step.route, step.tool, step.args(rng), **direct
     )
     seconds = time.perf_counter() - started
 
-    AGENT_CALLS.labels(persona.name, step.route, step.tool, expected, outcome).inc()
-    AGENT_SECONDS.labels(persona.name, step.route).observe(seconds)
+    AGENT_CALLS.labels(persona.name, route, step.tool, expected, outcome).inc()
+    AGENT_SECONDS.labels(persona.name, route).observe(seconds)
     if expected != "allow" and outcome in REACHED_TOOL:
-        UNGOVERNED.labels(persona.name, step.route, step.tool, expected).inc()
+        UNGOVERNED.labels(persona.name, route, step.tool, expected).inc()
     if expected == "allow" and outcome in REFUSED:
-        OVERBLOCKED.labels(persona.name, step.route, step.tool, outcome).inc()
-    return CallResult(
-        persona.name, step.route, step.tool, expected, outcome, status, seconds, detail
-    )
+        OVERBLOCKED.labels(persona.name, route, step.tool, outcome).inc()
+    return CallResult(persona.name, route, step.tool, expected, outcome, status, seconds, detail)
 
 
 async def run(

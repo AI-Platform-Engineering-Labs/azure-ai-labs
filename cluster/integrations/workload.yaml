@@ -1,0 +1,32 @@
+# AKS only, applied by `scripts/lab.sh integrations` (Lab Integrations workflow) with the
+# values of infra/azure/integrations filled in. Lab pods that need Azure run as this
+# service account: workload identity exchanges its token for the lab workload identity,
+# which may read secrets in the lab Key Vault. No secret is stored in the cluster.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: lab-workload
+  namespace: lab-agents
+  annotations:
+    azure.workload.identity/client-id: "${WORKLOAD_CLIENT_ID}"
+    azure.workload.identity/tenant-id: "${AZURE_TENANT_ID}"
+---
+# Secrets a pod can mount from the lab Key Vault through the AKS Key Vault CSI driver.
+# Add an entry under `objects` for each new secret (e.g. the Kavrynt Cloud cluster token).
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: lab-key-vault
+  namespace: lab-agents
+spec:
+  provider: azure
+  parameters:
+    usePodIdentity: "false"
+    clientID: "${WORKLOAD_CLIENT_ID}"
+    keyvaultName: "${KEY_VAULT_NAME}"
+    tenantId: "${AZURE_TENANT_ID}"
+    objects: |
+      array:
+        - |
+          objectName: ${CANARY_SECRET_NAME}
+          objectType: secret

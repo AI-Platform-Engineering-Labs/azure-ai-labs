@@ -10,6 +10,11 @@ output "kubernetes_version" {
   value = module.aks.current_kubernetes_version
 }
 
+output "oidc_issuer_url" {
+  description = "Issuer of the cluster's service account tokens; infra/azure/integrations federates the lab workload identity with it."
+  value       = module.aks.oidc_issuer_profile_issuer_url
+}
+
 output "node_resource_group_name" {
   description = "Created and deleted by AKS together with the cluster."
   value       = module.aks.node_resource_group_name

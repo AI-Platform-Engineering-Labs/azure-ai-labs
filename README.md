@@ -1,6 +1,6 @@
-# kavrynt-labs
+# azure-ai-labs
 
-A disposable lab for watching the Kavrynt MCP control plane govern real MCP traffic. Two
+Kavrynt Labs (formerly `kavrynt/kavrynt-labs`): a disposable lab for watching the Kavrynt MCP control plane govern real MCP traffic. Two
 teams' MCP servers sit behind the Kavrynt Gateway; three scripted agents (one of them rogue)
 call their tools all the time; Grafana shows what each agent did against what policy says it
 should have been allowed to do.
@@ -35,18 +35,22 @@ runtime from a `../kavrynt` checkout (`RUNTIME=source`).
 
 ## Run it in Azure, on demand
 
-The **Azure Lab** GitHub Actions workflow creates a one-node AKS cluster in the dev
-subscription, deploys the same lab, runs the same checks, and destroys it again:
+Three GitHub Actions workflows build the lab in the dev subscription, in dependency order.
+Each one refuses to run until the one before it is applied:
 
-| Operation | What happens |
-|---|---|
-| `up` (with a TTL of 2–24 h) | plan → approval issue → apply → deploy → checks |
-| `down` | destroy, then a check that nothing is left; no approval |
-| TTL reaper (every 2 h) | destroys the lab once its TTL has passed |
+| # | Workflow | What it does |
+|---|---|---|
+| 1 | **Lab Landing Zone** | VNet, AKS subnet and NSG, a static egress IP, the AKS control-plane identity; kept between labs |
+| 2 | **Azure Lab** | one-node AKS cluster (Azure CNI Overlay + Cilium, NetworkPolicy, workload identity) and a registry; deploys the same lab and runs the same checks. `up` with a TTL of 2–24 h (plan → approval → apply → deploy → checks), `down` (no approval), and a TTL reaper every 2 h |
+| 3 | **Lab Integrations** | after every manual Azure Lab run: Key Vault and a workload identity for the running cluster, then checks from inside the cluster that the Key Vault secret mounts and Kavrynt Cloud dev accepts the lab's egress IP |
 
-About USD 0.20 an hour while up, about zero while down. Nothing is exposed publicly; you
-connect with `kubectl port-forward`. One-time setup: [azure-setup.md](docs/runbooks/azure-setup.md);
-daily use: [azure-lab.md](docs/runbooks/azure-lab.md).
+kavrynt-platform's landing zone provides what comes before step 1: the resource group, its
+budget, the Terraform state container and the workflows' identity.
+
+About USD 0.20 an hour while the cluster is up, about USD 4 a month between labs (the
+static egress IP). Nothing is exposed publicly; you connect with `kubectl port-forward`.
+One-time setup: [azure-setup.md](docs/runbooks/azure-setup.md); daily use:
+[azure-lab.md](docs/runbooks/azure-lab.md).
 
 ## What is in the cluster
 
@@ -59,7 +63,9 @@ daily use: [azure-lab.md](docs/runbooks/azure-lab.md).
 | `lab-monitoring` | Prometheus and Grafana |
 
 Each server registers through an `MCPServer` resource, so the Gateway routes
-`/mcp/<namespace>.<name>` to it. Tools carry MCP annotations (`readOnlyHint`,
+`/mcp/<namespace>.<name>` to it. NetworkPolicies let only the Kavrynt runtime (and
+Prometheus) reach the team namespaces, so no caller can go around the Gateway; the rogue
+agent keeps trying, and those attempts show up as `direct:<namespace>.<name>`. Tools carry MCP annotations (`readOnlyHint`,
 `destructiveHint`, ...) and Kavrynt risk metadata in `_meta`. All data is synthetic.
 
 ## Reading the dashboard
@@ -82,7 +88,7 @@ growing. That is the gap later phases close; when enforcement lands it should st
 make venv         # lab/.venv with the lab package and dev tools
 make test         # ruff + pytest
 make validate     # render the Kubernetes manifests, check the scripts
-make tf-check     # terraform fmt + validate for infra/azure (Terraform 1.12+)
+make tf-check     # terraform fmt + validate for the infra/azure stacks (Terraform 1.12+)
 ```
 
 The lab package (`lab/`) is one image with three roles: `kavrynt-lab server`, `agent` and
