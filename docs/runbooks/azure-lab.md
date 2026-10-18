@@ -9,9 +9,9 @@ until the repository variables exist).
 
 ## What it costs
 
-About **USD 0.15 an hour** while up (one `Standard_B2s_v2` node, its disk, the load
+About **USD 0.20 an hour** while up (one `Standard_D2ds_v6` node, its disk, the load
 balancer for outbound traffic, a Basic registry; the AKS Free tier control plane is free),
-so roughly USD 1.20 for an 8-hour session at pay-as-you-go list prices. When it is down,
+so roughly USD 1.60 for an 8-hour session at pay-as-you-go list prices. When it is down,
 only the landing-zone foundations remain, at about zero. A monthly budget on
 `rg-kavrynt-lab` emails the subscription Owners at 50% spent and at 100% forecast.
 

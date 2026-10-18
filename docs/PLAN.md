@@ -83,7 +83,7 @@ counted and shown. As enforcement lands, that gap goes to zero.
 ## Cost and deletion
 
 - Local lab: free. `make lab-down` deletes the Kind cluster and everything in it.
-- Azure lab: about USD 0.15 an hour while up (one `Standard_B2s_v2` node, disk, outbound load
+- Azure lab: about USD 0.20 an hour while up (one `Standard_D2ds_v6` node, disk, outbound load
   balancer, Basic registry; AKS Free tier); about zero when down - the resource group, budget,
   state container and identity remain. The TTL reaper destroys a lab at most two hours after its
   TTL; the budget on `rg-kavrynt-lab` alerts the subscription Owners.

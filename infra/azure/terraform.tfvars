@@ -8,10 +8,10 @@ resource_group_name = "rg-kavrynt-lab" # region comes from the resource group
 cluster_name         = "aks-kavrynt-lab"
 registry_name_prefix = "acrkavryntlab"
 
-# 2 vCPUs / 8 GiB burstable: enough for Kavrynt, two MCP servers, three agents,
+# 2 vCPUs / 8 GiB: enough for Kavrynt, two MCP servers, three agents,
 # Prometheus and Grafana. Check family quota before the first run
 # (az vm list-usage --location <region>).
-node_vm_size = "Standard_B2s_v2"
+node_vm_size = "Standard_D2ds_v6"
 node_count   = 1
 
 # kavrynt-platform-admins (Entra group).

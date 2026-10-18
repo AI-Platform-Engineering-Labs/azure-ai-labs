@@ -24,11 +24,11 @@ Wait until all three say `Registered`.
 
 ## 2. Check the vCPU quota
 
-The lab uses one `Standard_B2s_v2` node (2 vCPUs) in `centralus`
+The lab uses one `Standard_D2ds_v6` node (2 vCPUs) in `centralus`
 (`infra/azure/terraform.tfvars`, and the region from the landing zone):
 
 ```bash
-az vm list-usage --location centralus -o table | grep -Ei "total regional|BSv2"
+az vm list-usage --location centralus -o table | grep -Ei "total regional|Ddsv6"
 ```
 
 You need at least 2 free vCPUs in both rows. If not, request more quota in the portal

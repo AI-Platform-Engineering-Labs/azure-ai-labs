@@ -12,7 +12,7 @@ Operation: `$ARGUMENTS`. Daily use: `docs/runbooks/azure-lab.md`. One-time setup
 
 Rules: Azure changes only through the **Azure Lab** workflow on `main`. Never run
 `terraform apply` for `infra/azure` from a laptop. Never comment `approve` on the approval
-issue: an approver in `LAB_APPROVERS` does. About USD 0.15 an hour while up.
+issue: an approver in `LAB_APPROVERS` does. About USD 0.20 an hour while up.
 
 ## Preconditions
 
