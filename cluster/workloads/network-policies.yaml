@@ -1,0 +1,60 @@
+# Only the Kavrynt runtime reaches the teams' MCP servers. Without these, any pod
+# could call payments-mcp or support-mcp directly and skip whatever the Gateway
+# enforces (docs/FINDINGS.md F10); the rogue agent tries exactly that, and
+# `kavrynt-lab check` expects it to be blocked.
+#
+# Enforced by Cilium on AKS and by kindnet on Kind. Ingress only: egress stays
+# open (the integrations check reaches Kavrynt Cloud dev). Kubernetes always
+# allows a node to reach its own pods, so kubelet probes keep working.
+# kavrynt-system and lab-monitoring carry no policy here: the runtime chart owns
+# the first, and Kind exposes the second on 127.0.0.1.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-from-kavrynt-only
+  namespace: team-payments
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    # Gateway (proxied tool calls) and Operator (MCPServer validation).
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kavrynt-system}}
+      ports: [{port: 8080, protocol: TCP}]
+    # Prometheus scrapes /metrics on the same port.
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: lab-monitoring}}
+          podSelector: {matchLabels: {app: prometheus}}
+      ports: [{port: 8080, protocol: TCP}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-from-kavrynt-only
+  namespace: team-support
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kavrynt-system}}
+      ports: [{port: 8080, protocol: TCP}]
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: lab-monitoring}}
+          podSelector: {matchLabels: {app: prometheus}}
+      ports: [{port: 8080, protocol: TCP}]
+---
+# Agents and checks serve nothing but their metrics.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: metrics-from-prometheus-only
+  namespace: lab-agents
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: lab-monitoring}}
+          podSelector: {matchLabels: {app: prometheus}}
+      ports: [{port: 9100, protocol: TCP}]

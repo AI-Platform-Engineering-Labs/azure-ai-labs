@@ -1,0 +1,45 @@
+# AKS only: checks the lab's integrations from inside the cluster (scripts/lab.sh
+# integrations deletes and re-creates this Job):
+#   - the Key Vault canary mounts through workload identity and the CSI driver;
+#   - Kavrynt Cloud dev answers through the lab's static egress IP (its firewall allows it).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lab-integrations-check
+  namespace: lab-agents
+  labels: {lab.kavrynt.io/role: check}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        lab.kavrynt.io/role: check
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: lab-workload
+      restartPolicy: Never
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: check
+          image: kavrynt-lab:local
+          imagePullPolicy: IfNotPresent
+          args: [integrations-check, --secret-file, "/mnt/secrets/${CANARY_SECRET_NAME}"]
+          env:
+            - {name: EXPECTED_SECRET, value: "${CANARY_SECRET_VALUE}"}
+            - {name: CLOUD_API_URL, value: "${CLOUD_API_URL}"}
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: secrets, mountPath: /mnt/secrets, readOnly: true}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+        - name: secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes: {secretProviderClass: lab-key-vault}

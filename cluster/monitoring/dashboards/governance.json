@@ -184,7 +184,7 @@
       "gridPos": {
         "x": 8,
         "y": 1,
-        "w": 4,
+        "w": 3,
         "h": 5
       },
       "targets": [
@@ -248,9 +248,9 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 12,
+        "x": 11,
         "y": 1,
-        "w": 4,
+        "w": 3,
         "h": 5
       },
       "targets": [
@@ -306,6 +306,72 @@
     },
     {
       "type": "stat",
+      "id": 21,
+      "title": "Calls around the Gateway",
+      "description": "Calls made straight to an MCP server's Service, skipping the Gateway, that reached the tool. NetworkPolicy should block them all (cluster/workloads/network-policies.yaml).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 14,
+        "y": 1,
+        "w": 4,
+        "h": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(kavrynt_lab_ungoverned_calls_total{route=~\"direct:.*\"}[$__range])) or vector(0)",
+          "legendFormat": "__auto",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "auto"
+      }
+    },
+    {
+      "type": "stat",
       "id": 6,
       "title": "Registered routes",
       "description": "Routes the Gateway learned from MCPServer resources.",
@@ -314,9 +380,9 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 16,
+        "x": 18,
         "y": 1,
-        "w": 4,
+        "w": 3,
         "h": 5
       },
       "targets": [
@@ -376,9 +442,9 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 20,
+        "x": 21,
         "y": 1,
-        "w": 4,
+        "w": 3,
         "h": 5
       },
       "targets": [
@@ -1191,7 +1257,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "**Policy expectations** live in `policies/expectations.yaml` (deny by default). The agents score every call against them; the control plane does not read that file.\n\n* **Ungoverned** - policy says deny or approve, the tool ran anyway.\n* **Over-blocked** - policy says allow, the control plane refused.\n* **not_found** - the Gateway has no route (unregistered server). This is the only control Kavrynt enforces today.\n\nUntil authentication and policy land in the runtime (ADR-0003), the ungoverned count is expected to grow. Gaps and limits are tracked in `docs/FINDINGS.md`."
+        "content": "**Policy expectations** live in `policies/expectations.yaml` (deny by default). The agents score every call against them; the control plane does not read that file.\n\n* **Ungoverned** - policy says deny or approve, the tool ran anyway.\n* **Over-blocked** - policy says allow, the control plane refused.\n* **not_found** - the Gateway has no route (unregistered server). This is the only control Kavrynt enforces today.\n* **direct:** routes - calls straight to a server's Service, around the Gateway. Always denied by policy; NetworkPolicy blocks them (outcome `timeout` or `unreachable`).\n\nUntil authentication and policy land in the runtime (ADR-0003), the ungoverned count is expected to grow. Gaps and limits are tracked in `docs/FINDINGS.md`."
       }
     }
   ]

@@ -1,4 +1,4 @@
-"""kavrynt-lab server | agent | check"""
+"""kavrynt-lab server | agent | check | integrations-check"""
 
 from __future__ import annotations
 
@@ -42,6 +42,13 @@ def main() -> None:
     )
     p.add_argument("--metrics-timeout", type=float, default=120)
 
+    p = sub.add_parser(
+        "integrations-check", help="AKS: secret store and Kavrynt Cloud reachability"
+    )
+    p.add_argument("--secret-file", default="/mnt/secrets/lab-canary")
+    p.add_argument("--expected-secret", default=os.environ.get("EXPECTED_SECRET", ""))
+    p.add_argument("--cloud-url", default=os.environ.get("CLOUD_API_URL", ""))
+
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     for noisy in ("httpx2", "httpx", "mcp"):
@@ -65,11 +72,24 @@ def main() -> None:
     elif args.command == "check":
         from kavrynt_lab.check import run_checks
 
-        results = asyncio.run(run_checks(args.gateway, args.prometheus, args.metrics_timeout))
-        width = max(len(r.name) for r in results)
-        for r in results:
-            print(f"{'PASS' if r.ok else 'FAIL'}  {r.name.ljust(width)}  {r.detail}")
-        sys.exit(0 if all(r.ok for r in results) else 1)
+        _report(asyncio.run(run_checks(args.gateway, args.prometheus, args.metrics_timeout)))
+    elif args.command == "integrations-check":
+        from kavrynt_lab.check import run_integration_checks
+
+        if not args.cloud_url or not args.expected_secret:
+            parser.error("integrations-check needs --cloud-url and --expected-secret")
+        _report(
+            asyncio.run(
+                run_integration_checks(args.secret_file, args.expected_secret, args.cloud_url)
+            )
+        )
+
+
+def _report(results) -> None:  # type: ignore[no-untyped-def]
+    width = max(len(r.name) for r in results)
+    for r in results:
+        print(f"{'PASS' if r.ok else 'FAIL'}  {r.name.ljust(width)}  {r.detail}")
+    sys.exit(0 if all(r.ok for r in results) else 1)
 
 
 if __name__ == "__main__":

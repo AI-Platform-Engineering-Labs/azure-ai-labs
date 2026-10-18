@@ -1,8 +1,10 @@
-# The Azure lab: one small AKS cluster and a registry for the lab image, inside
-# the landing-zone-owned rg-kavrynt-lab. Everything here is destroyed when the
-# lab is not in use (the Azure Lab workflow: operation "down" or the TTL
-# reaper); the resource group, budget, state container and GitHub identity stay
-# in kavrynt-platform's landing zone at about zero cost.
+# The Azure lab: one small AKS cluster and a registry for the lab image, built
+# into the lab landing zone's network (infra/azure/landing-zone, applied first
+# by the Lab Landing Zone workflow). Everything here is destroyed when the lab
+# is not in use (the Azure Lab workflow: operation "down" or the TTL reaper);
+# the network, the egress IP and the AKS identity stay in the lab landing zone,
+# and the resource group, budget, state container and GitHub identity in
+# kavrynt-platform's landing zone, all at about USD 4 a month.
 
 locals {
   # The TTL reaper reads these tags from the cluster (docs/runbooks/azure-lab.md).
@@ -16,6 +18,20 @@ data "azurerm_client_config" "current" {}
 
 data "azurerm_resource_group" "lab" {
   name = var.resource_group_name
+}
+
+# The lab landing zone's outputs: subnet, egress IP and control-plane identity.
+# The Azure Lab workflow checks that the landing zone is applied before it plans.
+data "terraform_remote_state" "landing_zone" {
+  backend = "azurerm"
+  config = merge(var.state_backend, {
+    key              = "landing-zone.tfstate"
+    use_azuread_auth = true
+  })
+}
+
+locals {
+  landing_zone = data.terraform_remote_state.landing_zone.outputs
 }
 
 resource "random_string" "registry_suffix" {
@@ -64,6 +80,16 @@ module "registry" {
 # Free tier control plane, one node, no in-place upgrades: the lab is rebuilt
 # rather than maintained.
 #
+# Networking: Azure CNI Overlay powered by Cilium, which enforces Kubernetes
+# NetworkPolicy (cluster/workloads/network-policies.yaml keeps callers from
+# reaching MCP servers around the Gateway). Nodes sit in the landing zone's
+# subnet; all egress leaves through its static IP, which Kavrynt Cloud dev
+# allows. The control plane uses the landing zone's identity, which already
+# holds Network Contributor on that subnet and IP.
+#
+# Workload identity and the Key Vault CSI driver let lab pods read secrets from
+# the vault in infra/azure/integrations without any secret in the cluster.
+#
 # Public API server (lab only): GitHub-hosted runners have no fixed IPs, so
 # authorized IP ranges cannot be used. Local accounts are disabled; every call
 # needs an Entra token and an Azure RBAC role on this cluster. No workload is
@@ -86,7 +112,8 @@ module "aks" {
   }
 
   managed_identities = {
-    system_assigned = true
+    system_assigned            = false
+    user_assigned_resource_ids = [local.landing_zone.aks_identity_id]
   }
 
   aad_profile = {
@@ -104,6 +131,7 @@ module "aks" {
     vm_size         = var.node_vm_size
     os_sku          = "AzureLinux"
     os_disk_size_gb = 64
+    vnet_subnet_id  = local.landing_zone.aks_subnet_id
 
     upgrade_settings = {
       max_surge = "10%"
@@ -113,8 +141,33 @@ module "aks" {
   network_profile = {
     network_plugin      = "azure"
     network_plugin_mode = "overlay"
+    network_dataplane   = "cilium"
+    network_policy      = "cilium"
     load_balancer_sku   = "standard"
     outbound_type       = "loadBalancer"
+    load_balancer_profile = {
+      outbound_ips = {
+        public_ips = [{ id = local.landing_zone.egress_ip_id }]
+      }
+    }
+  }
+
+  oidc_issuer_profile = {
+    enabled = true
+  }
+
+  security_profile = {
+    workload_identity = {
+      enabled = true
+    }
+  }
+
+  addon_profile_key_vault_secrets_provider = {
+    enabled = true
+    config = {
+      enable_secret_rotation = true
+      rotation_poll_interval = "2m"
+    }
   }
 
   auto_upgrade_profile = {

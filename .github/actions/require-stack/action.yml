@@ -1,0 +1,47 @@
+name: Require a lab stack
+description: >-
+  Fails unless an upstream lab stack (infra/azure/<stack>) is applied: its state must hold the
+  given output. This is how each lab workflow depends on the one before it:
+  Lab Landing Zone -> Azure Lab (cluster) -> Lab Integrations. Terraform must be set up and
+  Azure OIDC variables (ARM_*) set by the caller.
+
+inputs:
+  stack:
+    description: Upstream stack directory, e.g. infra/azure/landing-zone.
+    required: true
+  output:
+    description: An output that exists only once the stack is applied.
+    required: true
+  workflow:
+    description: Workflow that applies the upstream stack (named in the error).
+    required: true
+
+outputs:
+  value:
+    description: The output's value.
+    value: ${{ steps.read.outputs.value }}
+
+runs:
+  using: composite
+  steps:
+    - name: Read ${{ inputs.output }} from ${{ inputs.stack }}
+      id: read
+      shell: bash
+      env:
+        STACK: ${{ inputs.stack }}
+        OUTPUT: ${{ inputs.output }}
+        WORKFLOW: ${{ inputs.workflow }}
+      run: |
+        terraform -chdir="${STACK}" init -input=false -backend-config=backend.hcl >/dev/null
+        if value=$(terraform -chdir="${STACK}" output -raw "${OUTPUT}" 2>/dev/null) && [ -n "${value}" ]; then
+          echo "value=${value}" >> "$GITHUB_OUTPUT"
+          echo "${STACK} is applied (${OUTPUT}=${value})."
+          exit 0
+        fi
+        {
+          echo "### Blocked: ${STACK} is not applied"
+          echo
+          echo "Run the **${WORKFLOW}** workflow first (docs/runbooks/azure-lab.md, order of the workflows)."
+        } >> "$GITHUB_STEP_SUMMARY"
+        echo "::error::${STACK} is not applied (no output ${OUTPUT}). Run the ${WORKFLOW} workflow first."
+        exit 1

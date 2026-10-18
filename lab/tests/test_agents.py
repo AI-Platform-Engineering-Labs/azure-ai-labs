@@ -196,3 +196,71 @@ def test_expectations_reject_rules_that_would_widen(tmp_path, rule):
     path.write_text(f"default: deny\nrules:\n  - {rule}\n", encoding="utf-8")
     with pytest.raises(ValueError):
         Expectations.load(path)
+
+
+def test_direct_calls_around_the_gateway_are_always_denied():
+    rogue = PERSONAS["rogue-agent"]
+    direct = [s for s in rogue.steps if s.direct]
+    assert direct and all(s.scored_route == f"{agent.DIRECT}{s.route}" for s in direct)
+    e = Expectations.load(EXPECTATIONS)
+    assert all(e.decide("rogue-agent", s.scored_route, s.tool) == "deny" for s in direct)
+    # Even an agent allowed everything on the server through the Gateway.
+    assert (
+        e.decide("payments-agent", f"{agent.DIRECT}{PAYMENTS.route}", "search_payments") == "deny"
+    )
+
+
+async def test_direct_step_calls_the_service_and_scores_it_apart(monkeypatch):
+    seen = {}
+
+    async def fake_call(gateway, name, route, tool, args, timeout=15, url=None):
+        seen.update(url=url, timeout=timeout)
+        return "ok", 200, ""
+
+    monkeypatch.setattr(agent, "call_tool", fake_call)
+    rogue = PERSONAS["rogue-agent"]
+    only_direct = type(rogue)(rogue.name, tuple(s for s in rogue.steps if s.direct))
+    labels = {
+        "agent": "rogue-agent",
+        "route": f"{agent.DIRECT}{PAYMENTS.route}",
+        "tool": "get_customer",
+        "expected": "deny",
+    }
+    before = REGISTRY.get_sample_value("kavrynt_lab_ungoverned_calls_total", labels) or 0.0
+
+    result = await agent.act_once(
+        only_direct, "http://gw", Expectations.load(EXPECTATIONS), random.Random(1)
+    )
+
+    assert seen == {"url": PAYMENTS.direct_url, "timeout": agent.DIRECT_TIMEOUT}
+    assert result.route == labels["route"]
+    # A direct call that reaches the tool is ungoverned: nothing stopped it.
+    assert REGISTRY.get_sample_value("kavrynt_lab_ungoverned_calls_total", labels) == before + 1
+
+
+async def test_call_tool_honours_an_explicit_url(background):
+    app = InterceptMethod(build_app("support"), "none")
+    with background(app) as srv:
+        outcome, status, _ = await call_tool(
+            "http://127.0.0.1:9",  # nothing listens here: the URL must win
+            "probe-agent",
+            SUPPORT.route,
+            "search_tickets",
+            {"query": "refund"},
+            url=f"{srv.url}/mcp",
+        )
+    assert (outcome, status) == ("ok", 200)
+
+
+async def test_blocked_connection_is_not_reaching_the_tool():
+    # Port 9 (discard) refuses: what a NetworkPolicy reject looks like to the agent.
+    outcome, status, _ = await call_tool(
+        "http://gw",
+        "probe-agent",
+        SUPPORT.route,
+        "search_tickets",
+        {},
+        timeout=2,
+        url="http://127.0.0.1:9/mcp",
+    )
+    assert outcome in ("timeout", "unreachable") and status is None

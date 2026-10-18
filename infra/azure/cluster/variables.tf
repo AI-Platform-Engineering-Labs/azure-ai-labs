@@ -1,5 +1,5 @@
-# Values live in infra/azure/terraform.tfvars; expires_at and requested_by come
-# from the Azure Lab workflow for every run.
+# Values live in infra/azure/cluster/terraform.tfvars; expires_at and
+# requested_by come from the Azure Lab workflow for every run.
 
 variable "subscription_id" {
   description = "Subscription that hosts the lab (the Kavrynt dev subscription)."
@@ -14,6 +14,15 @@ variable "subscription_id" {
 variable "resource_group_name" {
   description = "Existing lab resource group. kavrynt-platform's landing zone owns it, its budget, and this stack's GitHub identity; this stack only fills it."
   type        = string
+}
+
+variable "state_backend" {
+  description = "Where the lab stacks keep their state (must match backend.hcl); the cluster reads the lab landing zone's outputs from there."
+  type = object({
+    resource_group_name  = string
+    storage_account_name = string
+    container_name       = string
+  })
 }
 
 variable "cluster_name" {

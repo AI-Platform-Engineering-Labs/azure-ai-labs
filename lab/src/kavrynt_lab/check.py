@@ -1,4 +1,8 @@
-"""In-cluster checks: the lab works end to end and the metrics tell the governance story."""
+"""In-cluster checks: the lab works end to end and the metrics tell the governance story.
+
+`run_checks` is `kavrynt-lab check` (every target); `run_integration_checks` is
+`kavrynt-lab integrations-check` (AKS, after the Lab Integrations workflow).
+"""
 
 from __future__ import annotations
 
@@ -6,12 +10,13 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx2
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 
-from kavrynt_lab.agent import UNREGISTERED, call_tool
+from kavrynt_lab.agent import DIRECT_TIMEOUT, UNREGISTERED, call_tool
 from kavrynt_lab.catalog import META_RISK, SERVERS
 
 
@@ -72,6 +77,17 @@ async def _call_paths(gateway: str) -> list[Check]:
         gateway, "lab-check", SERVERS["support"].route, "search_tickets", {"query": "refund"}
     )
     missing, m_status, _ = await call_tool(gateway, "lab-check", UNREGISTERED, "read_ledger", {})
+    # NetworkPolicy (cluster/workloads/network-policies.yaml) drops or refuses the connection.
+    support = SERVERS["support"]
+    direct, d_status, _ = await call_tool(
+        gateway,
+        "lab-check",
+        support.route,
+        "search_tickets",
+        {"query": "refund"},
+        timeout=DIRECT_TIMEOUT,
+        url=support.direct_url,
+    )
     return [
         Check(
             "read-only call through gateway", ok == "ok", f"outcome={ok} status={status} {detail}"
@@ -80,6 +96,11 @@ async def _call_paths(gateway: str) -> list[Check]:
             "unregistered server is refused",
             missing == "not_found",
             f"outcome={missing} status={m_status}",
+        ),
+        Check(
+            "direct call around the gateway is blocked",
+            direct in ("timeout", "unreachable"),
+            f"outcome={direct} status={d_status}",
         ),
     ]
 
@@ -130,3 +151,44 @@ async def run_checks(gateway: str, prometheus: str, metrics_timeout: float = 120
             outcome = Check(name, False, repr(exc)[:200])
         results.extend(outcome if isinstance(outcome, list) else [outcome])
     return results
+
+
+# --- Integrations (AKS): secret store and Kavrynt Cloud reachability ----------------------
+
+
+def _mounted_secret(path: str, expected: str) -> Check:
+    """The Key Vault CSI driver mounted the canary with the pod's workload identity."""
+    name = "key vault secret mounted (workload identity)"
+    file = Path(path)
+    if not file.is_file():
+        return Check(name, False, f"{path} is not mounted")
+    value = file.read_text(encoding="utf-8").strip()
+    # The canary is not a secret, but never print secret values: real ones follow this path.
+    return Check(
+        name, value == expected, f"{path}: {'matches' if value == expected else 'differs'}"
+    )
+
+
+async def _cloud_reachable(cloud_url: str) -> Check:
+    """Kavrynt Cloud dev allows only listed IPs; the lab's egress IP must be one of them."""
+    name = "kavrynt cloud dev reachable from the cluster"
+    url = f"{cloud_url.rstrip('/')}/healthz"
+    try:
+        async with httpx2.AsyncClient(timeout=10) as http:
+            resp = await http.get(url)
+    except httpx2.HTTPError as exc:
+        return Check(name, False, f"{url}: {exc!r}"[:200])
+    if resp.status_code == 403:
+        return Check(
+            name,
+            False,
+            f"{url}: 403, the Cloud dev firewall refuses the lab's egress IP; add it to "
+            "kavrynt-platform DEV_ALLOWED_INGRESS_CIDRS (docs/runbooks/azure-setup.md)",
+        )
+    return Check(name, resp.status_code == 200, f"{url}: {resp.status_code}")
+
+
+async def run_integration_checks(
+    secret_file: str, expected_secret: str, cloud_url: str
+) -> list[Check]:
+    return [_mounted_secret(secret_file, expected_secret), await _cloud_reachable(cloud_url)]
